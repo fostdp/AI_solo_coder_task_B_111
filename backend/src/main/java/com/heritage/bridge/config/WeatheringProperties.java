@@ -22,4 +22,11 @@ public class WeatheringProperties {
     private boolean scheduledEnabled = true;
     private String scheduledCron = "0 0 4 * * ?";
     private boolean dataTriggeredAutoEvaluate = true;
+
+    private boolean dataQualityCheckEnabled = true;
+    private double iqrOutlierThreshold = 1.5;
+    private double minCouplingQualityIndex = 0.4;
+    private double minDataPassRate = 0.6;
+    private double velocityStdDevThreshold = 0.5;
+    private double hardnessStdDevThreshold = 5.0;
 }
