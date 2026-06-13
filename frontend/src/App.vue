@@ -35,7 +35,11 @@ const menus = [
   { path: '/bridge', label: '三维监测' },
   { path: '/simulation', label: '力学仿真' },
   { path: '/damage', label: '损伤预测' },
-  { path: '/alerts', label: '告警中心' }
+  { path: '/alerts', label: '告警中心' },
+  { path: '/weathering', label: '石材风化评估' },
+  { path: '/traffic', label: '交通振动分析' },
+  { path: '/masonry', label: '砌筑工艺复原' },
+  { path: '/priority', label: '保护优先级' }
 ]
 
 onMounted(async () => {
