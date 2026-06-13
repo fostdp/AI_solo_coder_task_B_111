@@ -131,6 +131,67 @@ damage:
     observation-noise-ratio: 0.10
     random-seed: 42
 
+weathering:
+  regression:
+    default-hardness-coefficient: 0.15
+    default-velocity-coefficient: 8.0
+    default-intercept: 25.0
+    min-depth: 0.0
+    max-depth: 50.0
+    grade-none-max: 2.0
+    grade-slight-max: 5.0
+    grade-moderate-max: 10.0
+    grade-severe-max: 20.0
+  scheduled-enabled: true
+  scheduled-cron: "0 0 4 * * ?"
+  data-triggered-auto-evaluate: true
+
+traffic:
+  vibration:
+    default-natural-frequency: 3.0
+    default-damping-ratio: 0.05
+    default-bridge-mass: 500000.0
+    default-span-stiffness: 1.0e9
+    allowable-acceleration: 0.5
+    allowable-displacement: 0.005
+    default-vehicle-types: passenger,truck_light,truck_medium,truck_heavy,bus
+    scheduled-enabled: true
+    scheduled-cron: "0 30 2 * * ?"
+    data-triggered-auto-analyze: true
+
+masonry:
+  dem:
+    default-element-count: 200
+    min-element-count: 50
+    max-element-count: 1000
+    default-time-step: 1.0e-5
+    default-gravity-factor: 1.0
+    default-contact-stiffness: 1.0e9
+    default-damping-coefficient: 0.3
+    min-friction-coefficient: 0.1
+    max-friction-coefficient: 0.9
+    analysis-types: static,gravity,seismic,traffic
+    scheduled-enabled: true
+    scheduled-cron: "0 0 5 * * ?"
+
+priority:
+  topsis:
+    default-weights:
+      structure-safety: 0.30
+      damage-trend: 0.25
+      weathering: 0.15
+      traffic-impact: 0.15
+      historical-value: 0.15
+    priority-critical-max: 3
+    priority-high-max: 6
+    urgency-immediate-max: 1.0
+    urgency-urgent-max: 0.8
+    urgency-normal-max: 0.6
+    scheduled-enabled: true
+    scheduled-cron: "0 0 6 1 * ?"
+    protection-plan-enabled: true
+    default-plan-year: 2026
+
 logging:
   level:
     root: INFO
@@ -139,6 +200,10 @@ logging:
     com.heritage.bridge.fem: INFO
     com.heritage.bridge.damage: INFO
     com.heritage.bridge.alarm: INFO
+    com.heritage.bridge.weathering: INFO
+    com.heritage.bridge.traffic: INFO
+    com.heritage.bridge.masonry: INFO
+    com.heritage.bridge.priority: INFO
     org.hibernate.SQL: WARN
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
