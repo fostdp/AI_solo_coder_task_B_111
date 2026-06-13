@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.5</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.heritage</groupId>
+    <artifactId>bridge-monitor-parent</artifactId>
+    <version>2.0.0</version>
+    <packaging>pom</packaging>
+    <name>Ancient Bridge Health Monitoring System - Parent</name>
+    <description>古代石拱桥结构健康监测与力学仿真系统 - 多模块父项目</description>
+
+    <modules>
+        <module>bridge-common</module>
+        <module>weathering-evaluator</module>
+        <module>traffic-vibration-analyzer</module>
+        <module>masonry-simulator</module>
+        <module>bridge-prioritizer</module>
+        <module>bridge-monitor-app</module>
+    </modules>
+
+    <properties>
+        <java.version>17</java.version>
+        <postgres.version>42.7.3</postgres.version>
+        <commons-math3.version>3.6.1</commons-math3.version>
+        <eclipse-paho.version>1.2.5</eclipse-paho.version>
+        <lombok.version>1.18.30</lombok.version>
+        <hypersistence-utils.version>3.7.3</hypersistence-utils.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.heritage</groupId>
+                <artifactId>bridge-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.heritage</groupId>
+                <artifactId>weathering-evaluator</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.heritage</groupId>
+                <artifactId>traffic-vibration-analyzer</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.heritage</groupId>
+                <artifactId>masonry-simulator</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.heritage</groupId>
+                <artifactId>bridge-prioritizer</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-math3</artifactId>
+                <version>${commons-math3.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.eclipse.paho</groupId>
+                <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+                <version>${eclipse-paho.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.hypersistence</groupId>
+                <artifactId>hypersistence-utils-hibernate-63</artifactId>
+                <version>${hypersistence-utils.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <configuration>
+                        <source>${java.version}</source>
+                        <target>${java.version}</target>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>
