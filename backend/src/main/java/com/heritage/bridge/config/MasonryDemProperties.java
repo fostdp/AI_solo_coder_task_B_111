@@ -22,4 +22,17 @@ public class MasonryDemProperties {
 
     private boolean scheduledEnabled = true;
     private String scheduledCron = "0 0 5 * * ?";
+
+    private boolean parallelComputingEnabled = true;
+    private int parallelThreadCount = 4;
+    private boolean simplifiedContactModelEnabled = true;
+    private double neighborSearchRadius = 0.15;
+    private double verletListSkin = 0.02;
+    private int maxStepsForFastMode = 200;
+    private int maxStepsForStandardMode = 500;
+    private int maxStepsForFineMode = 1000;
+    private double fastModeConvergenceThreshold = 0.01;
+    private double standardModeConvergenceThreshold = 0.001;
+    private double fineModeConvergenceThreshold = 0.0001;
+    private long maxSimulationTimeMs = 300000;
 }
