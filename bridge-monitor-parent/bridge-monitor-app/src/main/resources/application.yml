@@ -1,0 +1,246 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: bridge-monitor
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/bridge_monitor
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        jdbc:
+          batch_size: 100
+        order_inserts: true
+        order_updates: true
+    open-in-view: false
+
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    serialization:
+      write-dates-as-timestamps: false
+
+mqtt:
+  broker:
+    url: tcp://localhost:1883
+    client-id: bridge-monitor-alert
+    username: admin
+    password: public
+    connection-timeout: 30
+    keep-alive-interval: 60
+    auto-reconnect: true
+    clean-session: false
+    qos: 1
+    message-retry-interval: 5000
+    max-inflight: 20
+    persistence-dir: ./mqtt-persistence
+  topic:
+    alert: heritage/bridge/alert
+    data-in: heritage/bridge/data/+
+
+alert:
+  thresholds:
+    settlement:
+      warning: 5.0
+      danger: 10.0
+      unit: mm
+    crack-rate:
+      warning: 0.5
+      danger: 1.0
+      unit: mm/月
+    strain:
+      warning: 100.0
+      danger: 150.0
+      unit: 微应变
+    temperature-rate:
+      warning: 5.0
+      danger: 8.0
+      unit: ℃/小时
+
+simulation:
+  fem:
+    default-element-count: 20
+    min-element-count: 10
+    max-element-count: 200
+    default-emean: 20.0
+    default-nu: 0.18
+    default-fc-mean: 40.0
+    default-stone-density: 2500.0
+    default-gravity: 9.81
+    default-thermal-expansion: 8.0e-6
+    default-traffic-load: 30000.0
+    default-mc-samples: 1000
+    min-mc-samples: 100
+    max-mc-samples: 10000
+    default-modulus-cov: 0.15
+    default-strength-cov: 0.20
+    min-cov: 0.01
+    max-cov: 0.50
+    default-stochastic: false
+    data-triggered-auto-sim: false
+    auto-sim-sensor-threshold: 50
+    scheduled-enabled: true
+    scheduled-cron: "0 0 2 * * ?"
+
+damage:
+  paris:
+    default-c: 1.0e-12
+    default-m: 3.0
+    min-c: 1.0e-20
+    max-c: 1.0e-8
+    min-m: 1.0
+    max-m: 10.0
+    default-years-to-predict: 5
+    default-annual-cycles: 365
+    default-stress-amplitude: 5.0e6
+    enable-bayesian-default: true
+    default-mcmc-samples: 10000
+    default-burnin: 2000
+    min-mcmc-samples: 1000
+    max-mcmc-samples: 100000
+    prior-c-mean: 1.0e-12
+    prior-c-std: 5.0e-13
+    prior-m-mean: 3.0
+    prior-m-std: 0.5
+    maintenance-threshold-mm: 10.0
+    danger-threshold-mm: 20.0
+    data-triggered-auto-predict: true
+    scheduled-enabled: true
+    scheduled-cron: "0 0 3 * * MON"
+    proposal-c-scale: 0.1
+    proposal-m-scale: 0.1
+    observation-noise-ratio: 0.10
+    random-seed: 42
+
+weathering:
+  regression:
+    default-hardness-coefficient: 0.15
+    default-velocity-coefficient: 8.0
+    default-intercept: 25.0
+    min-depth: 0.0
+    max-depth: 50.0
+    grade-none-max: 2.0
+    grade-slight-max: 5.0
+    grade-moderate-max: 10.0
+    grade-severe-max: 20.0
+  scheduled-enabled: true
+  scheduled-cron: "0 0 4 * * ?"
+  data-triggered-auto-evaluate: true
+
+traffic:
+  vibration:
+    default-natural-frequency: 3.0
+    default-damping-ratio: 0.05
+    default-bridge-mass: 500000.0
+    default-span-stiffness: 1.0e9
+    allowable-acceleration: 0.5
+    allowable-displacement: 0.005
+    default-vehicle-types: passenger,truck_light,truck_medium,truck_heavy,bus
+    scheduled-enabled: true
+    scheduled-cron: "0 30 2 * * ?"
+    data-triggered-auto-analyze: true
+
+masonry:
+  dem:
+    default-element-count: 200
+    min-element-count: 50
+    max-element-count: 1000
+    default-time-step: 1.0e-5
+    default-gravity-factor: 1.0
+    default-contact-stiffness: 1.0e9
+    default-damping-coefficient: 0.3
+    min-friction-coefficient: 0.1
+    max-friction-coefficient: 0.9
+    analysis-types: static,gravity,seismic,traffic
+    scheduled-enabled: true
+    scheduled-cron: "0 0 5 * * ?"
+    thread-pool:
+      core-size: 4
+      max-size: 8
+      queue-capacity: 50
+      thread-name-prefix: "dem-"
+
+priority:
+  topsis:
+    default-weights:
+      structure-safety: 0.30
+      damage-trend: 0.25
+      weathering: 0.15
+      traffic-impact: 0.15
+      historical-value: 0.15
+    priority-critical-max: 3
+    priority-high-max: 6
+    urgency-immediate-max: 1.0
+    urgency-urgent-max: 0.8
+    urgency-normal-max: 0.6
+    scheduled-enabled: true
+    scheduled-cron: "0 0 6 1 * ?"
+    protection-plan-enabled: true
+    default-plan-year: 2026
+    thread-pool:
+      core-size: 2
+      max-size: 4
+      queue-capacity: 20
+      thread-name-prefix: "topsis-"
+
+logging:
+  level:
+    root: INFO
+    com.heritage.bridge: DEBUG
+    com.heritage.bridge.dtu: INFO
+    com.heritage.bridge.fem: INFO
+    com.heritage.bridge.damage: INFO
+    com.heritage.bridge.alarm: INFO
+    com.heritage.bridge.weathering: INFO
+    com.heritage.bridge.traffic: INFO
+    com.heritage.bridge.masonry: INFO
+    com.heritage.bridge.priority: INFO
+    org.hibernate.SQL: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/bridge-monitor.log
+    max-size: 10MB
+    max-history: 30
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+    metrics:
+      export:
+        prometheus:
+          enabled: true
+          step: 10s
+      tags:
+        application: bridge-monitor
+
+cors:
+  allowed-origins: "http://localhost:3000,http://localhost:5173"
+  allowed-methods: "GET,POST,PUT,DELETE,OPTIONS"
+  allowed-headers: "*"
+  allow-credentials: true
+  max-age: 3600
