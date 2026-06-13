@@ -13,6 +13,7 @@ public class MasonryDemResultDTO {
 
     private Long bridgeId;
     private String analysisType;
+    private String computationMode;
     private Integer elementCount;
     private Integer contactCount;
     private Double maxContactForce;
@@ -26,4 +27,14 @@ public class MasonryDemResultDTO {
     private String stoneArrangement;
     private String recommendation;
     private LocalDateTime calculatedAt;
+
+    private Integer simulationSteps;
+    private Long computationTimeMs;
+    private Boolean parallelEnabled;
+    private Integer parallelThreads;
+    private Boolean simplifiedContactUsed;
+    private Double speedupRatio;
+    private String convergenceStatus;
+    private Integer contactsChecked;
+    private Integer contactsSkipped;
 }
