@@ -17,6 +17,51 @@ public class PriorityTopsisResultDTO {
     private List<AnnualPlanItem> protectionPlan;
     private LocalDateTime calculatedAt;
 
+    private Boolean delphiMethodUsed;
+    private Integer expertCount;
+    private Double expertConsensusCoefficient;
+    private Map<String, Double> expertAggregatedWeights;
+    private List<ExpertResult> expertResults;
+    private Boolean sensitivityAnalysisPerformed;
+    private Double rankingStabilityIndex;
+    private Map<String, Double> criteriaSensitivity;
+    private List<SensitivityResult> sensitivityResults;
+    private Boolean groupDecisionUsed;
+    private GroupDecisionReport groupDecisionReport;
+
+    @Data
+    @Builder
+    public static class ExpertResult {
+        private String expertName;
+        private String expertTitle;
+        private Double expertWeight;
+        private Map<String, Double> criteriaWeights;
+        private List<Integer> bridgeRankings;
+        private Double rankingAgreement;
+        private String comments;
+    }
+
+    @Data
+    @Builder
+    public static class SensitivityResult {
+        private String criteriaName;
+        private Double weightPerturbation;
+        private List<Integer> originalRankings;
+        private List<Integer> perturbedRankings;
+        private Double rankingCorrelation;
+        private Double stabilityScore;
+    }
+
+    @Data
+    @Builder
+    public static class GroupDecisionReport {
+        private Integer totalExperts;
+        private Double consensusLevel;
+        private String consensusInterpretation;
+        private String finalRecommendation;
+        private String minorityOpinions;
+    }
+
     @Data
     @Builder
     public static class BridgePriority {
