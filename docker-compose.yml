@@ -1,0 +1,151 @@
+version: '3.8'
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.13.0-pg15
+    container_name: bridge-timescaledb
+    environment:
+      POSTGRES_DB: bridge_monitor
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+      - ./backend/src/main/resources/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bridge_monitor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  mqtt-broker:
+    image: eclipse-mosquitto:2.0.18
+    container_name: bridge-mqtt-broker
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h localhost -t '$$SYS/#' -C 1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: bridge-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: bridge-backend
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://timescaledb:5432/bridge_monitor
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      MQTT_BROKER_URL: tcp://mqtt-broker:1883
+      MQTT_BROKER_USERNAME: admin
+      MQTT_BROKER_PASSWORD: public
+      CORS_ALLOWED_ORIGINS: "http://localhost,http://frontend:80"
+      TZ: Asia/Shanghai
+    ports:
+      - "8080:8080"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      mqtt-broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/actuator/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: bridge-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  simulator:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    container_name: bridge-simulator
+    environment:
+      TZ: Asia/Shanghai
+    command: ["--mode", "realtime", "--speedup", "1", "--api", "http://backend:8080/api/data"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - simulator
+
+  simulator-interactive:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    container_name: bridge-simulator-interactive
+    environment:
+      TZ: Asia/Shanghai
+    command: ["--mode", "realtime", "--speedup", "1", "--api", "http://backend:8080/api/data", "--interactive"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+    profiles:
+      - interactive
+
+volumes:
+  timescaledb-data:
+    driver: local
+  mosquitto-data:
+    driver: local
+  mosquitto-log:
+    driver: local
+  prometheus-data:
+    driver: local
