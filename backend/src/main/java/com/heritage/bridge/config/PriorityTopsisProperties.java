@@ -24,6 +24,15 @@ public class PriorityTopsisProperties {
     private boolean protectionPlanEnabled = true;
     private int defaultPlanYear = 2026;
 
+    private boolean delphiMethodEnabled = true;
+    private int defaultExpertCount = 5;
+    private double minExpertConsensus = 0.6;
+    private double expertWeightInfluence = 0.7;
+    private boolean sensitivityAnalysisEnabled = true;
+    private int sensitivityPerturbationCount = 10;
+    private double sensitivityPerturbationRange = 0.2;
+    private double rankingStabilityThreshold = 0.8;
+
     public PriorityTopsisProperties() {
         defaultWeights.put("structure-safety", 0.30);
         defaultWeights.put("damage-trend", 0.25);
