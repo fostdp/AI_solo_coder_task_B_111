@@ -21,5 +21,7 @@ public class WeatheringRequestDTO {
         private Double locZ;
         private Double surfaceHardness;
         private Double ultrasonicVelocity;
+        private Double echoAmplitude;
+        private Double signalNoiseRatio;
     }
 }
