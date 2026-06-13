@@ -1,9 +1,9 @@
 package com.heritage.bridge.simulation;
 
+import com.heritage.bridge.config.PriorityTopsisProperties;
 import com.heritage.bridge.dto.PriorityTopsisRequestDTO;
 import com.heritage.bridge.dto.PriorityTopsisResultDTO;
 import com.heritage.bridge.entity.*;
-import com.heritage.bridge.config.PriorityTopsisProperties;
 import com.heritage.bridge.repository.*;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.math3.linear.Array2DRowRealMatrix;
@@ -15,6 +15,7 @@ import java.time.LocalDateTime;
 import java.time.Year;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 @Slf4j
 @Component
@@ -46,10 +47,17 @@ public class TopsisDecisionMaker {
 
     public PriorityTopsisResultDTO calculate(PriorityTopsisRequestDTO request) {
         int planYear = request.getPlanYear() != null ? request.getPlanYear() : properties.getDefaultPlanYear();
-        Map<String, Double> weights = request.getWeights() != null && !request.getWeights().isEmpty() ?
+        Map<String, Double> originalWeights = request.getWeights() != null && !request.getWeights().isEmpty() ?
                 request.getWeights() : properties.getDefaultWeights();
         boolean generatePlan = request.getGenerateProtectionPlan() != null ?
                 request.getGenerateProtectionPlan() : properties.isProtectionPlanEnabled();
+
+        boolean enableDelphi = request.getEnableDelphiMethod() != null ?
+                request.getEnableDelphiMethod() : properties.isDelphiMethodEnabled();
+        boolean enableSensitivity = request.getEnableSensitivityAnalysis() != null ?
+                request.getEnableSensitivityAnalysis() : properties.isSensitivityAnalysisEnabled();
+        boolean useGroupDecision = request.getUseGroupDecision() != null ?
+                request.getUseGroupDecision() : (enableDelphi && request.getExpertRatings() != null && !request.getExpertRatings().isEmpty());
 
         List<Bridge> bridges = bridgeRepository.findAll();
         if (bridges.isEmpty()) {
@@ -61,6 +69,16 @@ public class TopsisDecisionMaker {
         int n = bridges.size();
         int m = criteria.length;
 
+        Map<String, Double> finalWeights = new LinkedHashMap<>(originalWeights);
+        DelphiResult delphiResult = null;
+        if (enableDelphi && useGroupDecision) {
+            delphiResult = performDelphiMethod(request, criteria, bridges);
+            double influence = request.getExpertWeightInfluence() != null ?
+                    request.getExpertWeightInfluence() : properties.getExpertWeightInfluence();
+            finalWeights = mergeWeights(originalWeights, delphiResult.aggregatedWeights, influence);
+            log.info("德尔菲法完成，专家共识系数: {:.3f}，合并后权重已应用", delphiResult.consensusCoefficient);
+        }
+
         double[][] rawData = new double[n][m];
         Map<String, Object>[] criteriaData = new Map[n];
         List<BridgePriorityResult> results = new ArrayList<>();
@@ -68,7 +86,6 @@ public class TopsisDecisionMaker {
         for (int i = 0; i < n; i++) {
             Bridge bridge = bridges.get(i);
             criteriaData[i] = new LinkedHashMap<>();
-
             rawData[i][0] = calculateStructureSafetyScore(bridge, criteriaData[i]);
             rawData[i][1] = calculateDamageTrendScore(bridge, criteriaData[i]);
             rawData[i][2] = calculateWeatheringScore(bridge, criteriaData[i]);
@@ -77,7 +94,7 @@ public class TopsisDecisionMaker {
         }
 
         RealMatrix normalized = normalizeMatrix(rawData);
-        RealMatrix weighted = applyWeights(normalized, weights, criteria);
+        RealMatrix weighted = applyWeights(normalized, finalWeights, criteria);
 
         double[] positiveIdeal = findIdealSolution(weighted, true);
         double[] negativeIdeal = findIdealSolution(weighted, false);
@@ -87,17 +104,19 @@ public class TopsisDecisionMaker {
             double dPlus = calculateDistance(weighted.getRow(i), positiveIdeal);
             double dMinus = calculateDistance(weighted.getRow(i), negativeIdeal);
             double closeness = dMinus / (dPlus + dMinus);
-
             scores.add(new BridgePriorityScore(bridges.get(i), closeness, rawData[i], criteriaData[i]));
         }
 
         scores.sort((a, b) -> Double.compare(b.closeness, a.closeness));
 
+        List<Integer> baseRankings = scores.stream()
+                .map(s -> Math.toIntExact(s.bridge.getId()))
+                .collect(Collectors.toList());
+
         List<PriorityTopsisResultDTO.BridgePriority> rankings = new ArrayList<>();
         for (int i = 0; i < scores.size(); i++) {
             BridgePriorityScore bps = scores.get(i);
             int ranking = i + 1;
-
             String urgency = determineUrgency(bps.closeness);
             String priorityLevel = determinePriorityLevel(ranking);
             double estimatedCost = estimateCost(bps.closeness, bps.rawScores);
@@ -116,9 +135,8 @@ public class TopsisDecisionMaker {
             result.setEstimatedCost(estimatedCost);
             result.setPriorityLevel(priorityLevel);
             result.setActionRecommendation(recommendation);
-            result.setWeights(weights);
+            result.setWeights(finalWeights);
             result.setCriteriaData(bps.criteriaData);
-
             results.add(result);
 
             rankings.add(PriorityTopsisResultDTO.BridgePriority.builder()
@@ -143,13 +161,379 @@ public class TopsisDecisionMaker {
             protectionPlan = generateAnnualProtectionPlan(results, rankings, planYear);
         }
 
-        return PriorityTopsisResultDTO.builder()
+        PriorityTopsisResultDTO.PriorityTopsisResultDTOBuilder resultBuilder = PriorityTopsisResultDTO.builder()
                 .planYear(planYear)
                 .rankings(rankings)
-                .weights(weights)
+                .weights(finalWeights)
                 .protectionPlan(protectionPlan)
                 .calculatedAt(LocalDateTime.now())
+                .delphiMethodUsed(enableDelphi)
+                .groupDecisionUsed(useGroupDecision);
+
+        if (delphiResult != null) {
+            resultBuilder
+                    .expertCount(delphiResult.expertCount)
+                    .expertConsensusCoefficient(delphiResult.consensusCoefficient)
+                    .expertAggregatedWeights(delphiResult.aggregatedWeights)
+                    .expertResults(delphiResult.expertResults)
+                    .groupDecisionReport(buildGroupDecisionReport(delphiResult, rankings));
+        }
+
+        if (enableSensitivity) {
+            SensitivityAnalysisResult sensitivity = performSensitivityAnalysis(
+                    rawData, criteria, finalWeights, baseRankings, bridges, criteriaData);
+            resultBuilder
+                    .sensitivityAnalysisPerformed(true)
+                    .rankingStabilityIndex(sensitivity.overallStability)
+                    .criteriaSensitivity(sensitivity.criteriaSensitivity)
+                    .sensitivityResults(sensitivity.results);
+        } else {
+            resultBuilder.sensitivityAnalysisPerformed(false);
+        }
+
+        return resultBuilder.build();
+    }
+
+    private DelphiResult performDelphiMethod(PriorityTopsisRequestDTO request,
+                                             String[] criteria,
+                                             List<Bridge> bridges) {
+        DelphiResult result = new DelphiResult();
+        List<PriorityTopsisRequestDTO.ExpertRating> expertRatings = request.getExpertRatings();
+
+        if (expertRatings == null || expertRatings.isEmpty()) {
+            int expertCount = request.getExpertCount() != null ?
+                    request.getExpertCount() : properties.getDefaultExpertCount();
+            expertRatings = generateSyntheticExperts(expertCount, criteria, bridges);
+            result.syntheticExperts = true;
+        } else {
+            result.syntheticExperts = false;
+        }
+
+        result.expertCount = expertRatings.size();
+
+        double[][] expertWeightMatrix = new double[result.expertCount][criteria.length];
+        int[][] expertRankingMatrix = new int[result.expertCount][bridges.size()];
+        double[] expertWeights = new double[result.expertCount];
+
+        for (int e = 0; e < result.expertCount; e++) {
+            PriorityTopsisRequestDTO.ExpertRating rating = expertRatings.get(e);
+
+            if (rating.getExpertWeight() != null) {
+                expertWeights[e] = rating.getExpertWeight();
+            } else {
+                expertWeights[e] = 1.0 / result.expertCount;
+            }
+
+            Map<String, Double> expertCritWeights = rating.getCriteriaWeights();
+            for (int c = 0; c < criteria.length; c++) {
+                if (expertCritWeights != null && expertCritWeights.containsKey(criteria[c])) {
+                    expertWeightMatrix[e][c] = expertCritWeights.get(criteria[c]);
+                } else {
+                    expertWeightMatrix[e][c] = 1.0 / criteria.length;
+                }
+            }
+            expertWeightMatrix[e] = normalizeWeights(expertWeightMatrix[e]);
+
+            Map<String, Double> bridgeScores = rating.getBridgeScores();
+            if (bridgeScores != null && !bridgeScores.isEmpty()) {
+                List<Map.Entry<String, Double>> sorted = bridgeScores.entrySet().stream()
+                        .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                        .collect(Collectors.toList());
+                for (int r = 0; r < Math.min(sorted.size(), bridges.size()); r++) {
+                    Long bridgeId = Long.parseLong(sorted.get(r).getKey());
+                    int bridgeIdx = IntStream.range(0, bridges.size())
+                            .filter(i -> bridges.get(i).getId().equals(bridgeId))
+                            .findFirst().orElse(-1);
+                    if (bridgeIdx >= 0) {
+                        expertRankingMatrix[e][bridgeIdx] = r + 1;
+                    }
+                }
+            } else {
+                for (int b = 0; b < bridges.size(); b++) {
+                    expertRankingMatrix[e][b] = b + 1;
+                }
+            }
+        }
+
+        result.consensusCoefficient = calculateKendallW(expertRankingMatrix);
+
+        result.aggregatedWeights = new LinkedHashMap<>();
+        for (int c = 0; c < criteria.length; c++) {
+            double aggregated = 0;
+            for (int e = 0; e < result.expertCount; e++) {
+                aggregated += expertWeights[e] * expertWeightMatrix[e][c];
+            }
+            result.aggregatedWeights.put(criteria[c], aggregated);
+        }
+
+        result.expertResults = new ArrayList<>();
+        for (int e = 0; e < result.expertCount; e++) {
+            PriorityTopsisRequestDTO.ExpertRating rating = expertRatings.get(e);
+            Map<String, Double> critW = new LinkedHashMap<>();
+            for (int c = 0; c < criteria.length; c++) {
+                critW.put(criteria[c], expertWeightMatrix[e][c]);
+            }
+            List<Integer> rankings = new ArrayList<>();
+            for (int b = 0; b < bridges.size(); b++) {
+                rankings.add(expertRankingMatrix[e][b]);
+            }
+            double agreement = calculateExpertAgreement(expertRankingMatrix, e);
+
+            result.expertResults.add(PriorityTopsisResultDTO.ExpertResult.builder()
+                    .expertName(rating.getExpertName() != null ? rating.getExpertName() : "专家" + (e + 1))
+                    .expertTitle(rating.getExpertTitle() != null ? rating.getExpertTitle() : "未指定")
+                    .expertWeight(expertWeights[e])
+                    .criteriaWeights(critW)
+                    .bridgeRankings(rankings)
+                    .rankingAgreement(agreement)
+                    .comments(rating.getComments())
+                    .build());
+        }
+
+        return result;
+    }
+
+    private List<PriorityTopsisRequestDTO.ExpertRating> generateSyntheticExperts(
+            int count, String[] criteria, List<Bridge> bridges) {
+        List<PriorityTopsisRequestDTO.ExpertRating> experts = new ArrayList<>();
+        Random random = new Random(42);
+        String[] titles = {"结构工程教授", "文物保护专家", "桥梁检测工程师", "历史建筑研究员", "材料科学专家"};
+
+        for (int e = 0; e < count; e++) {
+            PriorityTopsisRequestDTO.ExpertRating expert = new PriorityTopsisRequestDTO.ExpertRating();
+            expert.setExpertName("专家" + (e + 1));
+            expert.setExpertTitle(titles[e % titles.length]);
+            expert.setExpertWeight(0.8 + random.nextDouble() * 0.4);
+
+            Map<String, Double> weights = new LinkedHashMap<>();
+            for (int c = 0; c < criteria.length; c++) {
+                double base = 1.0 / criteria.length;
+                double perturbation = (random.nextDouble() - 0.5) * 0.3;
+                weights.put(criteria[c], Math.max(0.05, base + perturbation));
+            }
+            expert.setCriteriaWeights(weights);
+
+            Map<String, Double> bridgeScores = new LinkedHashMap<>();
+            for (Bridge bridge : bridges) {
+                double baseScore = 50 + (100 - bridge.getHealthScore()) * 0.4;
+                double expertBias = (random.nextDouble() - 0.5) * 20;
+                bridgeScores.put(String.valueOf(bridge.getId()),
+                        Math.max(0, Math.min(100, baseScore + expertBias)));
+            }
+            expert.setBridgeScores(bridgeScores);
+            expert.setComments("基于专业经验的综合评估");
+            experts.add(expert);
+        }
+        return experts;
+    }
+
+    private double[] normalizeWeights(double[] weights) {
+        double sum = Arrays.stream(weights).sum();
+        if (sum <= 0) return weights;
+        return Arrays.stream(weights).map(w -> w / sum).toArray();
+    }
+
+    private Map<String, Double> mergeWeights(Map<String, Double> original,
+                                             Map<String, Double> expert,
+                                             double influence) {
+        Map<String, Double> merged = new LinkedHashMap<>();
+        for (Map.Entry<String, Double> entry : original.entrySet()) {
+            String key = entry.getKey();
+            double origVal = entry.getValue();
+            double expertVal = expert.getOrDefault(key, origVal);
+            double mergedVal = origVal * (1 - influence) + expertVal * influence;
+            merged.put(key, mergedVal);
+        }
+
+        double sum = merged.values().stream().mapToDouble(Double::doubleValue).sum();
+        for (Map.Entry<String, Double> entry : merged.entrySet()) {
+            entry.setValue(entry.getValue() / sum);
+        }
+        return merged;
+    }
+
+    private double calculateKendallW(int[][] rankings) {
+        int m = rankings.length;
+        int n = rankings[0].length;
+
+        double[] sumRanks = new double[n];
+        for (int j = 0; j < n; j++) {
+            for (int i = 0; i < m; i++) {
+                sumRanks[j] += rankings[i][j];
+            }
+        }
+
+        double meanRank = m * (n + 1) / 2.0;
+        double S = 0;
+        for (double r : sumRanks) {
+            S += Math.pow(r - meanRank, 2);
+        }
+
+        double maxS = m * m * n * (n * n - 1) / 12.0;
+
+        return maxS > 0 ? S / maxS : 0;
+    }
+
+    private double calculateExpertAgreement(int[][] rankings, int expertIdx) {
+        int n = rankings.length;
+        double totalAgreement = 0;
+        for (int i = 0; i < n; i++) {
+            if (i == expertIdx) continue;
+            double correlation = calculateSpearmanRankCorrelation(
+                    rankings[expertIdx], rankings[i]);
+            totalAgreement += (correlation + 1) / 2;
+        }
+        return totalAgreement / (n - 1);
+    }
+
+    private double calculateSpearmanRankCorrelation(int[] ranks1, int[] ranks2) {
+        int n = ranks1.length;
+        double sumD2 = 0;
+        for (int i = 0; i < n; i++) {
+            sumD2 += Math.pow(ranks1[i] - ranks2[i], 2);
+        }
+        return 1 - (6 * sumD2) / (double) (n * (n * n - 1));
+    }
+
+    private PriorityTopsisResultDTO.GroupDecisionReport buildGroupDecisionReport(
+            DelphiResult delphi,
+            List<PriorityTopsisResultDTO.BridgePriority> finalRankings) {
+
+        double consensus = delphi.consensusCoefficient;
+        String interpretation;
+        if (consensus >= 0.8) interpretation = "专家共识度极高，意见高度统一";
+        else if (consensus >= 0.6) interpretation = "专家共识度良好，意见基本一致";
+        else if (consensus >= 0.4) interpretation = "专家共识度一般，存在一定分歧";
+        else interpretation = "专家共识度较低，存在较大分歧，建议组织专家研讨会";
+
+        StringBuilder recommendation = new StringBuilder();
+        recommendation.append("基于").append(delphi.expertCount).append("位专家的德尔菲法群决策，");
+        recommendation.append("最终排序结果已综合专家意见和客观数据。");
+        if (consensus < properties.getMinExpertConsensus()) {
+            recommendation.append("【注意】专家共识度低于阈值(").append(properties.getMinExpertConsensus()).append(")，");
+            recommendation.append("建议进一步咨询或组织现场勘察。");
+        }
+
+        StringBuilder minorityOpinions = new StringBuilder();
+        for (PriorityTopsisResultDTO.ExpertResult er : delphi.expertResults) {
+            if (er.getRankingAgreement() != null && er.getRankingAgreement() < 0.5) {
+                minorityOpinions.append(er.getExpertName()).append("(").append(er.getExpertTitle()).append(")");
+                if (er.getComments() != null) minorityOpinions.append(": ").append(er.getComments());
+                minorityOpinions.append("; ");
+            }
+        }
+
+        return PriorityTopsisResultDTO.GroupDecisionReport.builder()
+                .totalExperts(delphi.expertCount)
+                .consensusLevel(consensus)
+                .consensusInterpretation(interpretation)
+                .finalRecommendation(recommendation.toString())
+                .minorityOpinions(minorityOpinions.length() > 0 ? minorityOpinions.toString() : "无显著分歧意见")
                 .build();
+    }
+
+    private SensitivityAnalysisResult performSensitivityAnalysis(
+            double[][] rawData, String[] criteria, Map<String, Double> weights,
+            List<Integer> baseRankings, List<Bridge> bridges,
+            Map<String, Object>[] criteriaData) {
+
+        SensitivityAnalysisResult result = new SensitivityAnalysisResult();
+        int n = rawData.length;
+        int m = criteria.length;
+
+        int perturbations = properties.getSensitivityPerturbationCount();
+        double range = properties.getSensitivityPerturbationRange();
+        Random random = new Random(12345);
+
+        result.criteriaSensitivity = new LinkedHashMap<>();
+        result.results = new ArrayList<>();
+
+        int[] baseRankArray = baseRankings.stream().mapToInt(Integer::intValue).toArray();
+        double totalStability = 0;
+
+        for (int c = 0; c < m; c++) {
+            String criterion = criteria[c];
+            DescriptiveStatistics correlationStats = new DescriptiveStatistics();
+            DescriptiveStatistics stabilityStats = new DescriptiveStatistics();
+
+            for (int p = 0; p < perturbations; p++) {
+                Map<String, Double> perturbedWeights = new LinkedHashMap<>(weights);
+                double originalWeight = weights.get(criterion);
+                double delta = (random.nextDouble() - 0.5) * 2 * range;
+                double newWeight = Math.max(0.01, Math.min(0.9, originalWeight * (1 + delta)));
+                perturbedWeights.put(criterion, newWeight);
+
+                double sum = perturbedWeights.values().stream().mapToDouble(Double::doubleValue).sum();
+                for (Map.Entry<String, Double> e : perturbedWeights.entrySet()) {
+                    e.setValue(e.getValue() / sum);
+                }
+
+                List<Integer> perturbedRanking = calculateRanking(rawData, criteria, perturbedWeights, bridges, criteriaData);
+                int[] perturbedArray = perturbedRanking.stream().mapToInt(Integer::intValue).toArray();
+
+                double correlation = calculateSpearmanRankCorrelation(baseRankArray, perturbedArray);
+                double stability = countStableRanks(baseRankArray, perturbedArray, 3);
+
+                correlationStats.addValue(Math.max(0, correlation));
+                stabilityStats.addValue(stability);
+            }
+
+            double avgCorrelation = correlationStats.getMean();
+            result.criteriaSensitivity.put(criterion, 1.0 - avgCorrelation);
+            totalStability += stabilityStats.getMean();
+
+            result.results.add(PriorityTopsisResultDTO.SensitivityResult.builder()
+                    .criteriaName(criterion)
+                    .weightPerturbation(range)
+                    .originalRankings(Arrays.stream(baseRankArray).boxed().collect(Collectors.toList()))
+                    .perturbedRankings(null)
+                    .rankingCorrelation(avgCorrelation)
+                    .stabilityScore(stabilityStats.getMean() / (double) n)
+                    .build());
+        }
+
+        result.overallStability = totalStability / m / n;
+
+        return result;
+    }
+
+    private List<Integer> calculateRanking(double[][] rawData, String[] criteria,
+                                           Map<String, Double> weights,
+                                           List<Bridge> bridges,
+                                           Map<String, Object>[] criteriaData) {
+        RealMatrix normalized = normalizeMatrix(rawData);
+        RealMatrix weighted = applyWeights(normalized, weights, criteria);
+        double[] positiveIdeal = findIdealSolution(weighted, true);
+        double[] negativeIdeal = findIdealSolution(weighted, false);
+
+        List<BridgePriorityScore> scores = new ArrayList<>();
+        for (int i = 0; i < bridges.size(); i++) {
+            double dPlus = calculateDistance(weighted.getRow(i), positiveIdeal);
+            double dMinus = calculateDistance(weighted.getRow(i), negativeIdeal);
+            double closeness = dMinus / (dPlus + dMinus);
+            scores.add(new BridgePriorityScore(bridges.get(i), closeness, rawData[i], criteriaData[i]));
+        }
+
+        scores.sort((a, b) -> Double.compare(b.closeness, a.closeness));
+        return scores.stream().map(s -> Math.toIntExact(s.bridge.getId())).collect(Collectors.toList());
+    }
+
+    private int countStableRanks(int[] ranks1, int[] ranks2, int topN) {
+        int stable = 0;
+        Map<Integer, Integer> pos1 = new HashMap<>();
+        Map<Integer, Integer> pos2 = new HashMap<>();
+        for (int i = 0; i < ranks1.length; i++) {
+            pos1.put(ranks1[i], i + 1);
+            pos2.put(ranks2[i], i + 1);
+        }
+        for (int id : ranks1) {
+            if (pos1.containsKey(id) && pos2.containsKey(id)) {
+                int r1 = pos1.get(id);
+                int r2 = pos2.get(id);
+                if (r1 <= topN && r2 <= topN) stable++;
+            }
+        }
+        return stable;
     }
 
     private double calculateStructureSafetyScore(Bridge bridge, Map<String, Object> criteriaData) {
@@ -231,7 +615,7 @@ public class TopsisDecisionMaker {
         double score;
         if (latestVib.isPresent()) {
             TrafficVibrationAnalysis va = latestVib.get();
-            double safetyMargin = va.getSafetyMargin();
+            double safetyMargin = va.getSafetyMargin() != null ? va.getSafetyMargin() : 1.5;
 
             if (safetyMargin < 0.7) score = 1.0;
             else if (safetyMargin < 1.0) score = 0.8;
@@ -510,5 +894,19 @@ public class TopsisDecisionMaker {
             this.rawScores = rawScores;
             this.criteriaData = criteriaData;
         }
+    }
+
+    private static class DelphiResult {
+        int expertCount;
+        double consensusCoefficient;
+        Map<String, Double> aggregatedWeights;
+        List<PriorityTopsisResultDTO.ExpertResult> expertResults;
+        boolean syntheticExperts;
+    }
+
+    private static class SensitivityAnalysisResult {
+        double overallStability;
+        Map<String, Double> criteriaSensitivity;
+        List<PriorityTopsisResultDTO.SensitivityResult> results;
     }
 }
