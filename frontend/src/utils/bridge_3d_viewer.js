@@ -25,6 +25,9 @@ export class Bridge3DViewer {
     this.bridgeGroup = null
     this.sensorsGroup = null
     this.cracksGroup = null
+    this.weatheringGroup = null
+    this.vibrationGroup = null
+    this.forceChainGroup = null
     this.archLOD = []
     this.pierLOD = []
     this.sensorObjects = []
@@ -32,6 +35,9 @@ export class Bridge3DViewer {
     this.lodLevel = 1
     this.showHeatmap = true
     this.showCracks = true
+    this.showWeathering = false
+    this.showVibration = false
+    this.showForceChain = false
     this.minStress = 0
     this.maxStress = 1e6
     this.animationId = null
@@ -67,9 +73,15 @@ export class Bridge3DViewer {
     this.bridgeGroup = new THREE.Group()
     this.sensorsGroup = new THREE.Group()
     this.cracksGroup = new THREE.Group()
+    this.weatheringGroup = new THREE.Group()
+    this.vibrationGroup = new THREE.Group()
+    this.forceChainGroup = new THREE.Group()
     this.scene.add(this.bridgeGroup)
     this.scene.add(this.sensorsGroup)
     this.scene.add(this.cracksGroup)
+    this.scene.add(this.weatheringGroup)
+    this.scene.add(this.vibrationGroup)
+    this.scene.add(this.forceChainGroup)
 
     this._bindEvents()
     this.start()
@@ -145,6 +157,9 @@ export class Bridge3DViewer {
     this._disposeGroup(this.bridgeGroup)
     this._disposeGroup(this.sensorsGroup)
     this._disposeGroup(this.cracksGroup)
+    this._disposeGroup(this.weatheringGroup)
+    this._disposeGroup(this.vibrationGroup)
+    this._disposeGroup(this.forceChainGroup)
     this.archLOD = []
     this.sensorObjects = []
     this.controls?.dispose()
@@ -351,6 +366,357 @@ export class Bridge3DViewer {
     const mem = this.renderer?.info?.memory
     if (!mem) return 'N/A'
     return `${mem.geometries} geom / ${mem.textures} tex`
+  }
+
+  _getWeatheringColor(depth) {
+    const colors = [
+      { max: 2, color: new THREE.Color(0x22c55e) },
+      { max: 5, color: new THREE.Color(0x3b82f6) },
+      { max: 10, color: new THREE.Color(0xeab308) },
+      { max: 20, color: new THREE.Color(0xf97316) },
+      { max: Infinity, color: new THREE.Color(0xef4444) }
+    ]
+    for (let c of colors) {
+      if (depth <= c.max) return c.color
+    }
+    return colors[colors.length - 1].color
+  }
+
+  applyWeatheringOverlay(weatheringData) {
+    if (!this.bridgeData || !weatheringData) return
+    this._disposeGroup(this.weatheringGroup)
+
+    const span = this.bridgeData.spanLength || 37
+    const rise = span * (this.bridgeData.riseSpanRatio || 0.2)
+    const w = 9.6
+
+    weatheringData.forEach(point => {
+      const x = point.locX != null ? point.locX : (Math.random() - 0.5) * span * 0.8
+      const y = point.locY != null ? point.locY : 4 * rise * (0.25 - (x * x) / (span * span)) + 0.5
+      const z = point.locZ != null ? point.locZ : (Math.random() - 0.5) * w * 0.8
+      const depth = point.estimatedDepth != null ? point.estimatedDepth : 5
+      const color = this._getWeatheringColor(depth)
+
+      const radius = 0.5 + depth * 0.05
+      const geom = new THREE.SphereGeometry(radius, 16, 16)
+      const mat = new THREE.MeshStandardMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.7,
+        roughness: 0.8
+      })
+      const sphere = new THREE.Mesh(geom, mat)
+      sphere.position.set(x, y, z)
+      sphere.userData.weatheringPoint = point
+      this.weatheringGroup.add(sphere)
+
+      const ringGeom = new THREE.RingGeometry(radius * 1.2, radius * 1.5, 32)
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.4,
+        side: THREE.DoubleSide
+      })
+      const ring = new THREE.Mesh(ringGeom, ringMat)
+      ring.position.set(x, y, z)
+      ring.lookAt(x, y + 10, z)
+      this.weatheringGroup.add(ring)
+
+      const labelCanvas = document.createElement('canvas')
+      labelCanvas.width = 100
+      labelCanvas.height = 30
+      const ctx = labelCanvas.getContext('2d')
+      ctx.fillStyle = `rgba(${Math.floor(color.r * 255)},${Math.floor(color.g * 255)},${Math.floor(color.b * 255)},0.9)`
+      ctx.fillRect(0, 0, 100, 30)
+      ctx.fillStyle = '#fff'
+      ctx.font = 'bold 11px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText(`${depth.toFixed(1)}mm`, 50, 20)
+      const texture = new THREE.CanvasTexture(labelCanvas)
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture }))
+      sprite.scale.set(1.5, 0.45, 1)
+      sprite.position.set(x, y + radius + 0.5, z)
+      this.weatheringGroup.add(sprite)
+    })
+
+    this.showWeathering = true
+    this.weatheringGroup.visible = true
+  }
+
+  removeWeatheringOverlay() {
+    this._disposeGroup(this.weatheringGroup)
+    this.showWeathering = false
+  }
+
+  toggleWeatheringOverlay(weatheringData) {
+    if (this.showWeathering) {
+      this.removeWeatheringOverlay()
+    } else {
+      this.applyWeatheringOverlay(weatheringData)
+    }
+    return this.showWeathering
+  }
+
+  setWeatheringVisible(visible) {
+    this.showWeathering = visible
+    if (this.weatheringGroup) this.weatheringGroup.visible = visible
+  }
+
+  applyVibrationHeatmap(vibrationData) {
+    if (!this.bridgeData || !vibrationData) return
+    this._disposeGroup(this.vibrationGroup)
+
+    const span = this.bridgeData.spanLength || 37
+    const rise = span * (this.bridgeData.riseSpanRatio || 0.2)
+    const w = 9.6
+
+    const maxAccel = Math.max(...vibrationData.map(v => v.acceleration || 0), 0.01)
+    const minAccel = Math.min(...vibrationData.map(v => v.acceleration || 0), 0)
+
+    const segments = 20
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments
+      const x = -span / 2 + t * span
+      const y = 4 * rise * (0.25 - (x * x) / (span * span))
+
+      let accel = 0
+      let minDist = Infinity
+      for (let v of vibrationData) {
+        const vx = v.locX != null ? v.locX : 0
+        const dist = Math.abs(x - vx)
+        if (dist < minDist) {
+          minDist = dist
+          accel = v.acceleration || 0
+        }
+      }
+
+      const normalized = (accel - minAccel) / (maxAccel - minAccel)
+      const hue = (1 - normalized) * 0.3
+      const color = new THREE.Color().setHSL(hue, 1, 0.5)
+
+      const boxGeom = new THREE.BoxGeometry(span / segments, 0.1, w)
+      const boxMat = new THREE.MeshStandardMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.6 + normalized * 0.3,
+        roughness: 0.7
+      })
+      const box = new THREE.Mesh(boxGeom, boxMat)
+      box.position.set(x, y + 0.05, 0)
+      this.vibrationGroup.add(box)
+
+      if (i % 4 === 0) {
+        const arrowLen = 0.5 + normalized * 2
+        const arrowDir = new THREE.Vector3(0, 1, 0)
+        const arrowOrigin = new THREE.Vector3(x, y + 0.1, 0)
+        const arrow = new THREE.ArrowHelper(arrowDir, arrowOrigin, arrowLen, color.getHex(), 0.3, 0.2)
+        this.vibrationGroup.add(arrow)
+      }
+    }
+
+    const waveGeom = new THREE.PlaneGeometry(span, 0.5, segments, 4)
+    const positions = waveGeom.attributes.position
+    const colors = new Float32Array(positions.count * 3)
+
+    for (let i = 0; i < positions.count; i++) {
+      const px = positions.getX(i)
+      const py = positions.getY(i)
+
+      let accel = 0
+      let minDist = Infinity
+      for (let v of vibrationData) {
+        const vx = v.locX != null ? v.locX : 0
+        const dist = Math.abs(px - vx)
+        if (dist < minDist) {
+          minDist = dist
+          accel = v.acceleration || 0
+        }
+      }
+      const normalized = (accel - minAccel) / (maxAccel - minAccel)
+      const hue = (1 - normalized) * 0.3
+      const color = new THREE.Color().setHSL(hue, 1, 0.5)
+
+      positions.setY(i, py + Math.sin(px * 0.5 + Date.now() * 0.001) * normalized * 0.2)
+      colors[i * 3] = color.r
+      colors[i * 3 + 1] = color.g
+      colors[i * 3 + 2] = color.b
+    }
+    waveGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+
+    const waveMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.5,
+      side: THREE.DoubleSide
+    })
+    const wave = new THREE.Mesh(waveGeom, waveMat)
+    wave.position.set(0, rise * 0.5 + 1, -w / 2 - 1)
+    wave.rotation.x = -Math.PI / 6
+    this.vibrationGroup.add(wave)
+
+    this.showVibration = true
+    this.vibrationGroup.visible = true
+  }
+
+  removeVibrationHeatmap() {
+    this._disposeGroup(this.vibrationGroup)
+    this.showVibration = false
+  }
+
+  toggleVibrationHeatmap(vibrationData) {
+    if (this.showVibration) {
+      this.removeVibrationHeatmap()
+    } else {
+      this.applyVibrationHeatmap(vibrationData)
+    }
+    return this.showVibration
+  }
+
+  setVibrationVisible(visible) {
+    this.showVibration = visible
+    if (this.vibrationGroup) this.vibrationGroup.visible = visible
+  }
+
+  renderForceChains(forceChainData) {
+    if (!this.bridgeData || !forceChainData) return
+    this._disposeGroup(this.forceChainGroup)
+
+    const span = this.bridgeData.spanLength || 37
+    const rise = span * (this.bridgeData.riseSpanRatio || 0.2)
+
+    const maxForce = Math.max(...forceChainData.map(c => c.normalForce || 1), 1)
+
+    const stoneMat = new THREE.MeshStandardMaterial({
+      color: 0xc0b280,
+      roughness: 0.9,
+      transparent: true,
+      opacity: 0.3
+    })
+
+    const stonePositions = new Set()
+    forceChainData.forEach(chain => {
+      if (chain.x1 != null && chain.y1 != null) {
+        stonePositions.add(`${chain.x1.toFixed(1)},${chain.y1.toFixed(1)}`)
+      }
+      if (chain.x2 != null && chain.y2 != null) {
+        stonePositions.add(`${chain.x2.toFixed(1)},${chain.y2.toFixed(1)}`)
+      }
+    })
+
+    stonePositions.forEach(posStr => {
+      const [x, y] = posStr.split(',').map(Number)
+      const stoneGeom = new THREE.BoxGeometry(1.2, 0.6, 8)
+      const stone = new THREE.Mesh(stoneGeom, stoneMat)
+      stone.position.set(x, y, 0)
+      stone.castShadow = true
+      this.forceChainGroup.add(stone)
+    })
+
+    forceChainData.forEach((chain, idx) => {
+      const x1 = chain.x1 != null ? chain.x1 : 0
+      const y1 = chain.y1 != null ? chain.y1 : 0
+      const x2 = chain.x2 != null ? chain.x2 : 0
+      const y2 = chain.y2 != null ? chain.y2 : 0
+      const z1 = chain.z1 != null ? chain.z1 : 0
+      const z2 = chain.z2 != null ? chain.z2 : 0
+      const normalForce = chain.normalForce || 0
+
+      const forceRatio = Math.min(normalForce / maxForce, 1)
+      const thickness = 0.02 + forceRatio * 0.15
+
+      const color = forceRatio > 0.7 ? new THREE.Color(0xef4444) :
+                    forceRatio > 0.4 ? new THREE.Color(0xf97316) :
+                    forceRatio > 0.2 ? new THREE.Color(0xeab308) : new THREE.Color(0x22c55e)
+
+      const start = new THREE.Vector3(x1, y1, z1)
+      const end = new THREE.Vector3(x2, y2, z2)
+      const direction = end.clone().sub(start).normalize()
+      const length = start.distanceTo(end)
+
+      const cylGeom = new THREE.CylinderGeometry(thickness, thickness, length, 8)
+      const cylMat = new THREE.MeshStandardMaterial({
+        color: color,
+        emissive: color,
+        emissiveIntensity: forceRatio * 0.3,
+        transparent: true,
+        opacity: 0.8
+      })
+      const cylinder = new THREE.Mesh(cylGeom, cylMat)
+
+      const midPoint = start.clone().add(end).multiplyScalar(0.5)
+      cylinder.position.copy(midPoint)
+      cylinder.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        direction
+      )
+      cylinder.userData.forceChain = chain
+      this.forceChainGroup.add(cylinder)
+
+      if (forceRatio > 0.5) {
+        const arrowLen = 0.5
+        const arrowDir = direction.clone()
+        const arrowOrigin = midPoint.clone().add(arrowDir.clone().multiplyScalar(length * 0.25))
+        const arrow = new THREE.ArrowHelper(
+          arrowDir,
+          arrowOrigin,
+          arrowLen,
+          color.getHex(),
+          0.2,
+          0.15
+        )
+        this.forceChainGroup.add(arrow)
+
+        const arrow2 = new THREE.ArrowHelper(
+          arrowDir.clone().negate(),
+          midPoint.clone().add(arrowDir.clone().multiplyScalar(-length * 0.25)),
+          arrowLen,
+          color.getHex(),
+          0.2,
+          0.15
+        )
+        this.forceChainGroup.add(arrow2)
+      }
+
+      const labelCanvas = document.createElement('canvas')
+      labelCanvas.width = 80
+      labelCanvas.height = 24
+      const ctx = labelCanvas.getContext('2d')
+      ctx.fillStyle = `rgba(${Math.floor(color.r * 255)},${Math.floor(color.g * 255)},${Math.floor(color.b * 255)},0.85)`
+      ctx.fillRect(0, 0, 80, 24)
+      ctx.fillStyle = '#fff'
+      ctx.font = 'bold 10px sans-serif'
+      ctx.textAlign = 'center'
+      const displayForce = normalForce >= 1000 ? (normalForce / 1000).toFixed(1) + 'kN' : normalForce.toFixed(0) + 'N'
+      ctx.fillText(displayForce, 40, 16)
+      const texture = new THREE.CanvasTexture(labelCanvas)
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture }))
+      sprite.scale.set(1.2, 0.36, 1)
+      sprite.position.copy(midPoint)
+      sprite.position.y += 0.3
+      this.forceChainGroup.add(sprite)
+    })
+
+    this.showForceChain = true
+    this.forceChainGroup.visible = true
+  }
+
+  removeForceChains() {
+    this._disposeGroup(this.forceChainGroup)
+    this.showForceChain = false
+  }
+
+  toggleForceChains(forceChainData) {
+    if (this.showForceChain) {
+      this.removeForceChains()
+    } else {
+      this.renderForceChains(forceChainData)
+    }
+    return this.showForceChain
+  }
+
+  setForceChainVisible(visible) {
+    this.showForceChain = visible
+    if (this.forceChainGroup) this.forceChainGroup.visible = visible
   }
 }
 
