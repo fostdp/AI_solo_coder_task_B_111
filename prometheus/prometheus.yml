@@ -1,0 +1,31 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'bridge-monitor'
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'bridge-backend'
+    metrics_path: '/api/actuator/prometheus'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['backend:8080']
+        labels:
+          application: 'bridge-monitor'
+
+  - job_name: 'mqtt-broker'
+    static_configs:
+      - targets: ['mqtt-broker:1883']
+    params:
+      format: ['text']
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+
+rule_files:
