@@ -13,6 +13,16 @@ public class TrafficVibrationRequestDTO {
     private Double bridgeMass;
     private Double spanStiffness;
     private List<VehicleLoad> vehicleLoads;
+    private PavementParams pavement;
+
+    @Data
+    public static class PavementParams {
+        private Double thickness;
+        private Double dampingRatio;
+        private Double youngsModulus;
+        private Double density;
+        private String materialType;
+    }
 
     @Data
     public static class VehicleLoad {
